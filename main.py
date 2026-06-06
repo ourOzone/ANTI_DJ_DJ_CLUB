@@ -18,13 +18,14 @@ WINDOW_SEC = 10.0
 
 CAM_H = 300   # 두 배 크기
 CAM_W = 400   # 두 배 크기
-WAVEFORM_W = 1000
-
+CAM2_W = int(CAM_W * 0.4)  # 카메라 3
+CAM2_H = int(CAM_H * 0.4)
+WAVEFORM_W = CAM_W * 2
 BEAT_COLORS = np.array([
-    (255,   0,   0),   # 첫박  — 파랑
-    (128,   0, 128),   # 둘째박 — 보라
-    (  0, 200,   0),   # 셋째박 — 초록
-    (128,   0,   0),   # 넷째박 — 남색
+    (  0, 165, 255),   # 첫박  — 주황
+    (  0, 120, 220),   # 둘째박 — 진한 주황
+    ( 80, 200, 255),   # 셋째박 — 연한 주황
+    (  0,  80, 200),   # 넷째박 — 번트 오렌지
 ], dtype=np.uint8)
 
 
@@ -61,7 +62,7 @@ def analyze(path):
 
 
 def draw_waveform(amplitudes, bpm, beat_offset, label,
-                  pos=0.0, loop=None, cue=None, width=1000, height=150, pad=10):
+                  pos=0.0, loop=None, cue=None, width=WAVEFORM_W, height=150, pad=10):
     img = np.full((height, width, 3), 255, dtype=np.uint8)
     w, h = width - 2 * pad, height - 2 * pad
     mid  = pad + h // 2
@@ -572,12 +573,14 @@ def get_section(pt, box_size=(15, 10, 1.125), pattern_size=(10, 7), square_size=
     return track, zone
 
 
-def draw_top_view(finger_pts, active_states=None, box_size=(15, 10, 1.125),
+def draw_top_view(finger_pts, active_states=None, angles=None, box_size=(15, 10, 1.125),
                   pattern_size=(10, 7), square_size=1.0,
                   canvas_w=500, canvas_h=400, margin=40):
     """DJ 탑뷰: 바이닐 디스크 + 버튼 패널."""
     if active_states is None:
         active_states = [[False, False, False], [False, False, False]]
+    if angles is None:
+        angles = [0.0, 0.0]
 
     w, d, _ = box_size
     cx = (pattern_size[0] - 1) * square_size / 2 - w / 2
@@ -630,9 +633,14 @@ def draw_top_view(finger_pts, active_states=None, box_size=(15, 10, 1.125),
         cv.circle(img, cp, label_r,     (70, 70, 70), 1)
         # 스핀들 구멍
         cv.circle(img, cp, spindle_r, (180, 180, 180), -1)
-        # 하이라이트 반사 (왼쪽 상단 호)
-        cv.ellipse(img, cp, (r_px - 4, r_px - 4), 0, 210, 260,
+        # 하이라이트 반사 (회전 적용)
+        cv.ellipse(img, cp, (r_px - 4, r_px - 4), angles[side], 210, 260,
                    (60, 60, 60), 2)
+        # 레이블 회전 마커
+        rad = math.radians(angles[side])
+        mx = int(cp[0] + label_r * 0.65 * math.cos(rad))
+        my = int(cp[1] + label_r * 0.65 * math.sin(rad))
+        cv.line(img, cp, (mx, my), (210, 210, 210), 1)
 
     # ── 버튼 패널 ────────────────────────────────────────────────
     GAP    = 4
@@ -672,6 +680,69 @@ def draw_top_view(finger_pts, active_states=None, box_size=(15, 10, 1.125),
                 cv.circle(img, (px, py),  8, (130, 160, 255), 1)
 
     return img
+
+
+def compute_ar_H(K, dist, rvec, tvec, orig_w, orig_h, dst_w, dst_h,
+                 box_size=(15, 10, 1.125), pattern_size=(10, 7), square_size=1.0,
+                 canvas_w=500, canvas_h=400, margin=40):
+    """AR 호모그래피를 한 번만 계산해 반환. pose 고정이므로 루프 밖에서 호출."""
+    w, d, h = box_size
+    cx = (pattern_size[0] - 1) * square_size / 2 - w / 2
+    cy = (pattern_size[1] - 1) * square_size / 2 - d / 2
+
+    top_3d = np.float32([
+        [cx,     cy,     -h],
+        [cx + w, cy,     -h],
+        [cx + w, cy + d, -h],
+        [cx,     cy + d, -h],
+    ])
+    img_pts, _ = cv.projectPoints(top_3d, rvec, tvec, K, dist)
+    dst_pts = img_pts.reshape(-1, 2).astype(np.float32)
+    dst_pts[:, 0] *= dst_w / orig_w
+    dst_pts[:, 1] *= dst_h / orig_h
+
+    x_min = cx - 3
+    y_min = cy - 3
+    x_max = cx + w + 3
+    y_max = cy + d + 3
+    scale = min(
+        (canvas_w - 2 * margin) / (x_max - x_min),
+        (canvas_h - 2 * margin) / (y_max - y_min),
+    )
+    src_pts = np.float32([
+        [margin + (cx     - x_min) * scale, margin + (cy     - y_min) * scale],
+        [margin + (cx + w - x_min) * scale, margin + (cy     - y_min) * scale],
+        [margin + (cx + w - x_min) * scale, margin + (cy + d - y_min) * scale],
+        [margin + (cx     - x_min) * scale, margin + (cy + d - y_min) * scale],
+    ])
+
+    try:
+        H, _ = cv.findHomography(src_pts, dst_pts)
+        return H
+    except cv.error:
+        return None
+
+
+def apply_ar_overlay(frame, topview_img, H, alpha=0.7):
+    """사전 계산된 H로 AR 합성. warpPerspective 1회 (BGRA)."""
+    if H is None:
+        return frame
+    fh, fw = frame.shape[:2]
+
+    bg_mask = cv.inRange(topview_img,
+                         np.array([240, 240, 240], dtype=np.uint8),
+                         np.array([255, 255, 255], dtype=np.uint8))
+    bgra = cv.cvtColor(topview_img, cv.COLOR_BGR2BGRA)
+    bgra[:, :, 3] = cv.bitwise_not(bg_mask)
+
+    warped = cv.warpPerspective(bgra, H, (fw, fh))
+    mask = warped[:, :, 3] > 128
+    warped_bgr = warped[:, :, :3]
+
+    blended = cv.addWeighted(warped_bgr, alpha, frame, 1 - alpha, 0)
+    result = frame.copy()
+    result[mask] = blended[mask]
+    return result
 
 
 def load_pose_and_calib(calib_path='cali_result.txt', pose_path='pose.txt'):
@@ -723,10 +794,23 @@ def draw_booth_box(frame, K, dist, rvec, tvec,
     img_pts = img_pts.reshape(-1, 2).astype(np.int32)
 
     out = frame.copy()
-    cv.drawContours(out, [img_pts[:4]], -1, (0, 255, 0),  2)   # 바닥면 — 초록
+
+    # 옆면 4개 검정 채우기 (상단면은 AR 텍스처가 덮음)
+    BLACK = (15, 15, 15)
+    side_faces = [
+        img_pts[[0, 1, 5, 4]],
+        img_pts[[1, 2, 6, 5]],
+        img_pts[[2, 3, 7, 6]],
+        img_pts[[3, 0, 4, 7]],
+    ]
+    for face in side_faces:
+        cv.fillPoly(out, [face], BLACK)
+
+    # 윤곽선
+    cv.drawContours(out, [img_pts[:4]], -1, (40, 40, 40),  1)
     for i in range(4):
-        cv.line(out, tuple(img_pts[i]), tuple(img_pts[i + 4]), (255, 0, 0), 2)  # 기둥 — 파랑
-    cv.drawContours(out, [img_pts[4:]], -1, (0, 0, 255),  2)   # 윗면  — 빨강
+        cv.line(out, tuple(img_pts[i]), tuple(img_pts[i + 4]), (40, 40, 40), 1)
+    cv.drawContours(out, [img_pts[4:]], -1, (40, 40, 40),  1)
     return out
 
 
@@ -783,6 +867,13 @@ def main():
 
     cap0 = ThreadedCamera(0)
     cap1 = ThreadedCamera(1)
+    cap2 = ThreadedCamera(2)
+    if cap2._alive:
+        CAM2_W = int(cap2._cap.get(cv.CAP_PROP_FRAME_WIDTH)  * 0.6)
+        CAM2_H = int(cap2._cap.get(cv.CAP_PROP_FRAME_HEIGHT) * 0.6)
+    else:
+        CAM2_W = int(CAM_W * 0.4)
+        CAM2_H = int(CAM_H * 0.4)
 
     cams, pose = load_pose_and_calib()
     if cams and pose:
@@ -796,6 +887,9 @@ def main():
     bar_durs = [left_bar_dur,  right_bar_dur]
     offsets  = [left_offset,   right_offset]
 
+    jog_angles = [0.0, 0.0]
+    jog_last_t = time.time()
+
     SCRATCH_Y_SCALE = 0.1
     scratch_st = [
         {'active': False, 'last_y': None, 'last_t': None},
@@ -806,6 +900,9 @@ def main():
     cv.namedWindow("Music Player")
     cv.namedWindow("Top View")
     cv.setMouseCallback("Music Player", make_mouse_callback(player))
+
+    topview_cache = draw_top_view([], active_states=[[False]*3, [False]*3])
+    ar_H = [None, None]
 
     while True:
         player.update()
@@ -827,6 +924,9 @@ def main():
 
         ret0, frame0 = cap0.read()
         ret1, frame1 = cap1.read()
+        ret2, frame2 = cap2.read()
+        if ret2 and frame2 is not None:
+            frame2 = cv.flip(frame2, 1)
 
         # 핸드 트래킹은 박스 오버레이 전 원본 프레임으로 수행
         raw0 = frame0.copy() if ret0 and frame0 is not None else None
@@ -834,7 +934,7 @@ def main():
         if raw0 is not None and raw1 is not None:
             hand_tracker.submit(raw0, raw1)
 
-        # 원본 해상도에서 박스를 그린 뒤 리사이즈 (K 왜곡 없이 정확히 투영)
+        # 원본 해상도에서 박스 옆면 채우기, 리사이즈 후 AR 합성
         if cams and pose:
             if ret0 and frame0 is not None:
                 frame0 = draw_booth_box(
@@ -853,6 +953,29 @@ def main():
                else np.full((CAM_H, CAM_W, 3), 40, dtype=np.uint8)
         cam1 = cv.resize(frame1, (CAM_W, CAM_H)) if ret1 and frame1 is not None \
                else np.full((CAM_H, CAM_W, 3), 40, dtype=np.uint8)
+        cam2_img = cv.resize(frame2, (CAM2_W, CAM2_H)) if ret2 and frame2 is not None \
+                   else np.full((CAM2_H, CAM2_W, 3), 40, dtype=np.uint8)
+        cv.putText(cam2_img, "CAM 3", (4, 18), cv.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+        # H 최초 계산 (pose 고정이므로 1회만)
+        if cams and pose and ar_H[0] is None and ret0 and frame0 is not None \
+                and ret1 and frame1 is not None:
+            oh0, ow0 = frame0.shape[:2]
+            oh1, ow1 = frame1.shape[:2]
+            ar_H[0] = compute_ar_H(
+                cams['camera0']['matrix'], cams['camera0']['dist'],
+                pose['camera0']['rvec'],   pose['camera0']['tvec'],
+                ow0, oh0, CAM_W, CAM_H,
+            )
+            ar_H[1] = compute_ar_H(
+                cams['camera1']['matrix'], cams['camera1']['dist'],
+                pose['camera1']['rvec'],   pose['camera1']['tvec'],
+                ow1, oh1, CAM_W, CAM_H,
+            )
+
+        if ar_H[0] is not None:
+            cam0 = apply_ar_overlay(cam0, topview_cache, ar_H[0])
+            cam1 = apply_ar_overlay(cam1, topview_cache, ar_H[1])
 
         cv.putText(cam0, "CAM 1", (8, 28), cv.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
         cv.putText(cam1, "CAM 2", (8, 28), cv.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
@@ -864,8 +987,8 @@ def main():
             cam1,
             np.full((CAM_H, WAVEFORM_W - CAM_W * 2 - side, 3), 20, dtype=np.uint8),
         ])
-        canvas = np.vstack([left_img, right_img, cam_row])
-        cv.imshow("Music Player", canvas)
+        main_panel = np.vstack([left_img, right_img, cam_row])
+
 
         hands0, hands1 = hand_tracker.get()
         finger_pts = []
@@ -933,7 +1056,23 @@ def main():
              player.get_cue(i)  is not None]
             for i in range(2)
         ]
-        cv.imshow("Top View", draw_top_view(finger_pts, active_states=active_states))
+        now_jog    = time.time()
+        dt_jog     = now_jog - jog_last_t
+        jog_last_t = now_jog
+        for i in range(2):
+            if player.is_playing[i]:
+                jog_angles[i] = (jog_angles[i] + 180.0 * dt_jog) % 360.0
+
+        topview_cache = draw_top_view(finger_pts, active_states=active_states, angles=jog_angles)
+        tv_h = topview_cache.shape[0]
+        tv_cropped = topview_cache[int(tv_h * 0.1):int(tv_h * 0.9), :]
+        topview_resized = cv.resize(tv_cropped, (CAM2_W, int(tv_cropped.shape[0] * CAM2_W / topview_cache.shape[1])))
+        combined_view = np.vstack([cam2_img, topview_resized])
+        target_h = main_panel.shape[0]
+        scale = target_h / combined_view.shape[0]
+        combined_scaled = cv.resize(combined_view,
+                                    (int(combined_view.shape[1] * scale), target_h))
+        cv.imshow("Music Player", np.hstack([combined_scaled, main_panel]))
 
         key = cv.waitKey(30) & 0xFF
         if key == 27:          # ESC — 종료
@@ -958,6 +1097,7 @@ def main():
     player.stop_all()
     cap0.release()
     cap1.release()
+    cap2.release()
     cv.destroyAllWindows()
 
 
