@@ -2,6 +2,8 @@
 
 [![Demo](https://img.youtube.com/vi/aI5a5IY7ONk/0.jpg)](https://youtu.be/aI5a5IY7ONk)
 
+> 썸네일을 클릭하면 영상이 재생됩니다.
+
 > "No decks, no problem."
 
 웹캠 두 대와 MediaPipe를 활용해 손의 3D 절대좌표를 추적하고, 허공에 가상 디제잉 머신을 띄워 실제 장비 없이 제스처만으로 디제잉을 구현하는 프로젝트.
