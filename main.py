@@ -15,7 +15,6 @@ from pathlib import Path
 
 BPS        = 100
 WINDOW_SEC = 10.0
-
 CAM_H = 300   # 두 배 크기
 CAM_W = 400   # 두 배 크기
 CAM2_W = int(CAM_W * 0.4)  # 카메라 3
@@ -269,24 +268,6 @@ class MusicPlayer:
             self._loop_pending[track_idx] = True  # loop_end까지 현재 재생 유지
         # 정지 중이면 toggle()로 재생 시 _play_loop() 호출됨
 
-    def resize_loop(self, track_idx, factor, min_dur, max_dur):
-        if not self._loop[track_idx]:
-            return
-        cur_dur = self._loop_end[track_idx] - self._loop_start[track_idx]
-        new_dur = max(min_dur, min(max_dur, cur_dur * factor))
-        self._loop_end[track_idx] = min(
-            self._loop_start[track_idx] + new_dur,
-            len(self._audio[track_idx]) / self.SAMPLE_RATE,
-        )
-        if self.is_playing[track_idx] and not self._loop_pending[track_idx]:
-            # 현재 루프 위치에서 일반 재생으로 전환, 새 loop_end까지 대기
-            pos = self.get_pos(track_idx)
-            self._channels[track_idx].stop()
-            self._offset[track_idx]       = pos
-            self.is_playing[track_idx]    = False
-            self._loop_pending[track_idx] = True
-            self._play_normal(track_idx)
-        # pending 상태면 loop_end만 바꾸면 됨
 
     def update(self):
         for i in range(2):
@@ -420,10 +401,6 @@ class MusicPlayer:
         if self._loop[track_idx]:
             return self._loop_start[track_idx], self._loop_end[track_idx]
         return None
-
-    def set_kill(self, track_idx, active):
-        """킬스위치: 재생은 유지하되 볼륨만 0으로."""
-        self._channels[track_idx].set_volume(0.0 if active else 1.0)
 
     def stop_all(self):
         for i in range(2):
@@ -856,11 +833,6 @@ def main():
 
     left_bar_dur  = 4 * 60 / left_bpm
     right_bar_dur = 4 * 60 / right_bpm
-    left_min  = 0.25 * 60 / left_bpm   # 1/4박
-    right_min = 0.25 * 60 / right_bpm
-    left_max  = 4 * left_bar_dur        # 4마디
-    right_max = 4 * right_bar_dur
-
     player = MusicPlayer()
     player.load(0, left_path)
     player.load(1, right_path)
@@ -898,7 +870,6 @@ def main():
     bot_prev = [{z: False for z in ('bot1', 'bot2', 'bot3')} for _ in range(2)]
 
     cv.namedWindow("Music Player")
-    cv.namedWindow("Top View")
     cv.setMouseCallback("Music Player", make_mouse_callback(player))
 
     topview_cache = draw_top_view([], active_states=[[False]*3, [False]*3])
@@ -1074,25 +1045,8 @@ def main():
                                     (int(combined_view.shape[1] * scale), target_h))
         cv.imshow("Music Player", np.hstack([combined_scaled, main_panel]))
 
-        key = cv.waitKey(30) & 0xFF
-        if key == 27:          # ESC — 종료
+        if cv.waitKey(30) & 0xFF == 27:
             break
-        elif key == ord('1'):  # 1 — 왼쪽 재생/정지
-            player.toggle(0)
-        elif key == ord('2'):  # 2 — 오른쪽 재생/정지
-            player.toggle(1)
-        elif key == ord('3'):  # 3 — 왼쪽 루프 on/off
-            player.toggle_loop(0, left_bar_dur, left_offset)
-        elif key == ord('4'):  # 4 — 오른쪽 루프 on/off
-            player.toggle_loop(1, right_bar_dur, right_offset)
-        elif key == ord('5'):  # 5 — 왼쪽 루프 절반
-            player.resize_loop(0, 0.5, left_min, left_max)
-        elif key == ord('6'):  # 6 — 오른쪽 루프 절반
-            player.resize_loop(1, 0.5, right_min, right_max)
-        elif key == ord('7'):  # 7 — 왼쪽 루프 2배
-            player.resize_loop(0, 2.0, left_min, left_max)
-        elif key == ord('8'):  # 8 — 오른쪽 루프 2배
-            player.resize_loop(1, 2.0, right_min, right_max)
 
     player.stop_all()
     cap0.release()
