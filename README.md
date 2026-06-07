@@ -1,5 +1,7 @@
 # ANTI DJ DJ CLUB
 
+[![Demo](https://img.youtube.com/vi/aI5a5IY7ONk/0.jpg)](https://youtu.be/aI5a5IY7ONk)
+
 > "No decks, no problem."
 
 웹캠 두 대와 MediaPipe를 활용해 손의 3D 절대좌표를 추적하고, 허공에 가상 디제잉 머신을 띄워 실제 장비 없이 제스처만으로 디제잉을 구현하는 프로젝트.
@@ -42,7 +44,7 @@
 
 ### 캘리브레이션 (`cali.py`)
 
-![캘리브레이션 결과](images/cali.mp4)
+![캘리브레이션 결과](images/calibration.png)
 
 체스보드 패턴을 인식해 두 카메라의 내부 파라미터(초점 거리, 왜곡 계수 등)를 계산하고 `cali_result.txt`로 저장한다.
 
@@ -58,7 +60,7 @@
 
 ### 메인 실행 (`main.py`)
 
-![메인 실행 결과](images/main.mp4)
+![메인 실행 결과](images/main.png)
 
 두 카메라 피드 위에 AR 부스 오버레이가 합성되고, 실시간 비트 싱크 파형과 탑뷰 DJ 인터페이스가 함께 표시된다.
 
